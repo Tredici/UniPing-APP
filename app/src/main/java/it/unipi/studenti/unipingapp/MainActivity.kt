@@ -356,6 +356,7 @@ class MainActivity : ComponentActivity(), LocationListener, OnNmeaMessageListene
             get() = responseRecvTS - requestSendTS
     }
     data class PingStats(
+        val ip: InetAddress, val port: Int,
         val uuid: UUID,
         val reps: Int, var lost: Int = 0,
         var min1: Long = 0, var max1: Long = 0, var mean1: Float = 0f, var var1: Float = 0f,
@@ -396,7 +397,11 @@ class MainActivity : ComponentActivity(), LocationListener, OnNmeaMessageListene
         }
 
         fun statistics() : PingStats {
-            val ans = PingStats(uuid, reps)
+            val ans = PingStats(
+                ip = ip,
+                port = port,
+                uuid = uuid,
+                reps = reps)
             var sum1: Long = 0
             var sum2: Long = 0
             var sq_sum1: Long = 0
@@ -856,9 +861,10 @@ fun PingApp(
                 items = pingList,
                 key = { ps -> ps.uuid }
             ) { ps ->
-                Text(
+                PingStatsBox(ps = ps)
+                /*Text(
                     text = "${ps}"
-                )
+                )*/
             }
         }
     }
@@ -995,7 +1001,13 @@ fun PingFormPreview() {
     UniPingAppTheme {
         PingApp(
             timeSource = "System",
-            pingList = Collections.singletonList(MainActivity.PingStats(UUID.randomUUID() , 10)),
+            pingList = Collections.singletonList(
+                MainActivity.PingStats(
+                    ip = InetAddress.getByName("127.0.0.1"),
+                    port = 8080,
+                    uuid = UUID.randomUUID() ,
+                    reps = 10)
+            ),
             onPing = { a,b -> Unit },
             onBind = { a -> false },
             verifyInputs = {a,b-> false },
@@ -1056,4 +1068,79 @@ fun EditIpField(
         keyboardOptions = keyboardOptions,
         modifier = modifier
     )
+}
+
+@Composable
+fun PingStatsBox(
+    ps: MainActivity.PingStats,
+    modifier: Modifier = Modifier
+) {
+    Column {
+        // UUID
+        Row {
+            Text(text = ps.uuid.toString())
+        }
+        // Remote
+        Row {
+            Text(text = "Remote")
+            Text(text = "${ps.ip}:${ps.port}")
+        }
+        Row {
+            Text(text = "Repetitions")
+            Text(text = "${ps.reps}")
+        }
+        Spacer(modifier = Modifier.height(2.dp))
+        // BODY - table
+        // request - response - rtt
+        Row {
+            Spacer(modifier = Modifier.weight(1f))
+            Text(text = "request",
+                modifier = Modifier.weight(1f))
+            Text(text = "response",
+                modifier = Modifier.weight(1f))
+            Text(text = "rtt",
+                modifier = Modifier.weight(1f))
+        }
+        Row {
+            Text(text = "min",
+                modifier = Modifier.weight(1f))
+            Text(text = "${ps.min1}",
+                modifier = Modifier.weight(1f))
+            Text(text = "${ps.min2}",
+                modifier = Modifier.weight(1f))
+            Text(text = "${ps.rttMin}",
+                modifier = Modifier.weight(1f))
+        }
+        Row {
+            Text(text = "max",
+                modifier = Modifier.weight(1f))
+            Text(text = "${ps.max1}",
+                modifier = Modifier.weight(1f))
+            Text(text = "${ps.max2}",
+                modifier = Modifier.weight(1f))
+            Text(text = "${ps.rttMax}",
+                modifier = Modifier.weight(1f))
+        }
+        Row {
+            Text(text = "mean",
+                modifier = Modifier.weight(1f))
+            Text(text = "${ps.mean1}",
+                modifier = Modifier.weight(1f))
+            Text(text = "${ps.mean2}",
+                modifier = Modifier.weight(1f))
+            Text(text = "${ps.rttMean}",
+                modifier = Modifier.weight(1f))
+        }
+        Row {
+            Text(text = "var",
+                modifier = Modifier.weight(1f))
+            Text(text = "${ps.var1}",
+                modifier = Modifier.weight(1f))
+            Text(text = "${ps.var2}",
+                modifier = Modifier.weight(1f))
+            Text(text = "${ps.rttVar}",
+                modifier = Modifier.weight(1f))
+        }
+
+    }
 }
