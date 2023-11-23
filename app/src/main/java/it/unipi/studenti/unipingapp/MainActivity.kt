@@ -63,6 +63,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Switch
 import androidx.compose.ui.text.style.TextAlign
 import androidx.core.content.ContextCompat
+import it.unipi.studenti.unipingapp.it.unipi.studenti.unipingapp.AppLocationListener
+import it.unipi.studenti.unipingapp.it.unipi.studenti.unipingapp.AppNmeaMessageListener
+import it.unipi.studenti.unipingapp.it.unipi.studenti.unipingapp.GnssMeasurementsEventObserver
 import it.unipi.studenti.unipingapp.ui.theme.UniPingAppTheme
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -71,7 +74,14 @@ import java.util.regex.Pattern
 import kotlin.time.ExperimentalTime
 
 @OptIn(ExperimentalTime::class)
-class MainActivity : ComponentActivity(), LocationListener, OnNmeaMessageListener {
+class MainActivity : ComponentActivity() {
+
+    private val gnssStatusObserver = GnssStatusObserver()
+    private val gnssNavigationMessageObserver = GnssNavigationMessageObserver()
+    private val gnssMeasurementsEventObserver = GnssMeasurementsEventObserver()
+
+    private val appLocationListener = AppLocationListener(appActivity = this)
+    private val appNmeaMessageListener = AppNmeaMessageListener(appActivity = this)
 
     companion object {
         const val LOCATION_UPDATES_FREQUENCY_MS = 1000L
@@ -574,15 +584,18 @@ class MainActivity : ComponentActivity(), LocationListener, OnNmeaMessageListene
         ) {
             Log.d("Location", "Incorrect 'uses-permission', requires 'ACCESS_FINE_LOCATION'");
         } else {
-            locationManager.addNmeaListener(this, Handler(Looper.getMainLooper()))
+            val mainHandler = Handler(Looper.getMainLooper())
+
+            locationManager.registerGnssStatusCallback (gnssStatusObserver, mainHandler)
+            locationManager.registerGnssNavigationMessageCallback(gnssNavigationMessageObserver, mainHandler)
+            locationManager.registerGnssMeasurementsCallback(gnssMeasurementsEventObserver, mainHandler)
+            locationManager.addNmeaListener(appNmeaMessageListener, mainHandler)
+
             Log.d("Location", "Location update requested");
             Log.d("Location", "Using GPS")
-            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, LOCATION_UPDATES_FREQUENCY_MS, 0f, this)
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, LOCATION_UPDATES_FREQUENCY_MS, 0f, appLocationListener as LocationListener)
             Log.d("Location", "Using Network")
-            locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, LOCATION_UPDATES_FREQUENCY_MS, 0f, this)
-            /*if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-            } else {
-            }*/
+            locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, LOCATION_UPDATES_FREQUENCY_MS, 0f, appLocationListener as LocationListener)
         }
     }
 
@@ -592,12 +605,15 @@ class MainActivity : ComponentActivity(), LocationListener, OnNmeaMessageListene
     }
     data class TimeMeasure(val receivedTimeMs: Long, val localMonotonicTM: TimeSource.Monotonic.ValueTimeMark)
     */
-    private fun getCurrentTimeMark() : Long {
+    fun getCurrentTimeMark() : Long {
         return SystemClock.elapsedRealtime()
     }
     data class TimeMeasure(val receivedTimeMs: Long, val localMonotonicTM: Long, val source: String)
     @Volatile
     private var lastTimeMeasure: TimeMeasure? = null
+    fun setLastTimeMeasure(ltm: TimeMeasure?) {
+        lastTimeMeasure = ltm
+    }
 
     fun getCurrentTS() : Long {
         val t = lastTimeMeasure
@@ -618,7 +634,7 @@ class MainActivity : ComponentActivity(), LocationListener, OnNmeaMessageListene
     private fun registerTimeSourceCallback(callback: (String) -> Unit) {
         timeSourceCallback = callback
     }
-    private fun updateTimeSourceText(source: String) {
+    fun updateTimeSourceText(source: String) {
         runOnUiThread {
             if (timeSourceCallback == null) {
                 Log.w("TIME", "Missing timeSourceCallback")
@@ -637,7 +653,7 @@ class MainActivity : ComponentActivity(), LocationListener, OnNmeaMessageListene
             SECONDARY_PRIORITIZED_TIME_SOURCE
     }
 
-    private fun submitCandidateTime(candidate: TimeMeasure) {
+    fun submitCandidateTime(candidate: TimeMeasure) {
         var ltm = lastTimeMeasure
         if (ltm == null) {
             // initialize
@@ -647,7 +663,7 @@ class MainActivity : ComponentActivity(), LocationListener, OnNmeaMessageListene
             // try to update
             if (ltm.receivedTimeMs < candidate.receivedTimeMs && ltm.localMonotonicTM < candidate.localMonotonicTM) {
                 // received newer, use it but only if it is prioritary or enoygh time passed
-                if ((ltm.localMonotonicTM + MINIMUM_LOC_UP_INTERVAL_MS < candidate.localMonotonicTM && ltm.source == PRIORITIZED_TIME_SOURCE && candidate.source != PRIORITIZED_TIME_SOURCE)
+                if ((ltm.localMonotonicTM + MINIMUM_LOC_UP_INTERVAL_MS < candidate.localMonotonicTM && ltm.source != PRIORITIZED_TIME_SOURCE && candidate.source != PRIORITIZED_TIME_SOURCE)
                     ||
                     (ltm.source != PRIORITIZED_TIME_SOURCE && candidate.source == PRIORITIZED_TIME_SOURCE)
                     ||
@@ -662,15 +678,6 @@ class MainActivity : ComponentActivity(), LocationListener, OnNmeaMessageListene
         }
     }
 
-    override fun onLocationChanged(location: Location) {
-        var tm = getCurrentTimeMark()
-        Log.d("GPS", "provider ${location.provider} location.time ${location.time} System.time ${System.currentTimeMillis()}")
-        // Rely on NMEA for GPS time
-        if (location.provider != LocationManager.GPS_PROVIDER) {
-            val candidate = TimeMeasure(receivedTimeMs = location.time, localMonotonicTM = tm, source = location.provider ?: "Unknown")
-            submitCandidateTime(candidate)
-        }
-    }
 
     @Volatile
     var nmeaDebug : Boolean = false
@@ -688,7 +695,7 @@ class MainActivity : ComponentActivity(), LocationListener, OnNmeaMessageListene
     data class DebugMsg(val ip : InetAddress,
                         val port : Int,
                         val message : String)
-    private fun sendDebugMsg(message: String) {
+    fun sendDebugMsg(message: String) {
         val debugIp = this.debugIp
         val debugPort = this.debugPort
         if (nmeaDebug && debugIp != null && debugPort != null) {
@@ -700,63 +707,8 @@ class MainActivity : ComponentActivity(), LocationListener, OnNmeaMessageListene
             senderHanlder.sendMessage(msg)
         }
     }
-    private fun debugNmea(nmeaMessage: String) {
+    fun debugNmea(nmeaMessage: String) {
         sendDebugMsg("NMEA DEBUG: ${nmeaMessage}")
-    }
-
-    override fun onNmeaMessage(message: String?, timestamp: Long) {
-        var tm = getCurrentTimeMark()
-        Log.d("GPS", "onNmeaMessage msg ${message} ts ${timestamp} System.time ${System.currentTimeMillis()}")
-        // consider only time in GPGGA sentences
-        // Reference: https://www.rfwireless-world.com/Terminology/GPS-sentences-or-NMEA-sentences.html
-        if (message != null && message.startsWith("\$GPGGA") ?: false) {
-            try {
-                // UTC time is second field in sentence
-                val utcTimeNow = OffsetDateTime.now(ZoneOffset.UTC)
-                // hhmmss.sss
-                val utc = message.split(',')[1].split('.')
-                val ms = utc[1].let {
-                    when (it.length) {
-                        0 -> 0
-                        1 -> it.toInt() * 100
-                        2 -> it.toInt() * 10
-                        3 -> it.toInt()
-                        else -> it.substring(0..2).toInt()
-                    }
-                }
-                val seconds_since_midnight = utc[0].let {
-                    ( ( (
-                            it.substring(0..1).toInt() * 60
-                            ) + it.substring(2..3).toInt() ) * 60
-                            + it.substring(4..5).toInt()
-                            )
-                }
-                val midnigth =  utcTimeNow.let {
-                    OffsetDateTime.of(
-                        it.year, it.monthValue, it.dayOfMonth,
-                        0, 0, 0, 0,
-                        it.offset)
-                }
-                // convert obtained time to timestamp
-                val calculatedTs = midnigth
-                    .plusSeconds(seconds_since_midnight.toLong())
-                    .toEpochSecond() * 1000L + ms.toLong()
-
-                if (nmeaDebug) {
-                    sendDebugMsg("NMEA parsed TS ${calculatedTs} from ${message}")
-                }
-                val candidate = TimeMeasure(receivedTimeMs = calculatedTs, localMonotonicTM = tm, source = LocationManager.GPS_PROVIDER)
-                submitCandidateTime(candidate)
-            } catch (e: Exception) {
-                Log.e("NMEA", "Exception while decoding UTC time in ${message}")
-            }
-        }
-        if (nmeaDebug && message != null) {
-            debugNmea(message)
-        }
-    }
-    override fun onProviderDisabled(provider: String) {
-
     }
 }
 
@@ -1071,14 +1023,41 @@ fun EditIpField(
 }
 
 @Composable
+@Preview
+fun PingStatsBoxPreview() {
+    UniPingAppTheme {
+        PingStatsBox(
+            ps = MainActivity.PingStats(
+                uuid = UUID.randomUUID(),
+                ip = InetAddress.getByName("127.0.0.1"),
+                port = 8080,
+                reps = 100, lost = 15,
+                max1 = 10, max2 = 20, rttMax = 30,
+                min1 = 4, min2 = 8, rttMin = 9,
+                mean1 = 7f, mean2 = 18f, rttMean = 13f,
+                var1 = 88.2145f, var2 = 5.1236f, rttVar = 887.7f
+            )
+        )
+    }
+}
+
+@Composable
 fun PingStatsBox(
     ps: MainActivity.PingStats,
     modifier: Modifier = Modifier
 ) {
     Column {
         // UUID
-        Row {
-            Text(text = ps.uuid.toString())
+        Row (
+            modifier = Modifier.padding(top = 5.dp)
+        ) {
+            Text(
+                text = ps.uuid.toString(),
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(alignment = Alignment.CenterVertically)
+            )
         }
         // Remote
         Row {
@@ -1141,6 +1120,5 @@ fun PingStatsBox(
             Text(text = "${ps.rttVar}",
                 modifier = Modifier.weight(1f))
         }
-
     }
 }
